@@ -440,6 +440,14 @@ This project is for educational and research purposes.
 
 ---
 
+## Contributors
+
+| Name | Role | Contribution |
+|------|------|--------------|
+| Trần Thái Tuấn | Developer | Project development, TDA implementation, documentation |
+
+---
+
 ## Contact
 
 For questions or issues, please open an issue on the repository.
