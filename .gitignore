@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+venv/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Outputs (optional - can keep if needed)
+outputs/*.png
+outputs/*.pdf
+outputs/*.npy
+outputs/*.csv
+!outputs/.gitkeep
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
