@@ -1,25 +1,37 @@
+# Data - raw input data (user-specific)
+data/raw/
+
+# Processed data - generated from data cleaning
+data/processed/
+
+# Outputs - all pipeline results
+outputs/
+
 # Python
 __pycache__/
-*.pyc
-*.egg-info/
+*.py[cod]
+*$py.class
+*.so
+.Python
 venv/
 env/
 .venv/
+*.egg-info/
+dist/
+build/
 
 # IDE
 .vscode/
 .idea/
-
-# Outputs (optional - can keep if needed)
-outputs/*.png
-outputs/*.pdf
-outputs/*.npy
-outputs/*.csv
-!outputs/.gitkeep
-
-# Logs
-*.log
+*.swp
+*.swo
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Logs
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
