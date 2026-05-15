@@ -29,11 +29,11 @@ This project analyzes the **SECOM (Semiconductor Manufacturing) dataset** using 
 
 ### Methodology
 
-1. **Data Processing**: Handle missing values, remove constant features, standardize, apply PCA
+1. **Data Processing**: KNN imputation, POD/SVD dimension reduction, sliding windows
 2. **Time-Series Windows**: Create sliding windows to capture temporal patterns
-3. **TDA Features**: Extract H1 (loops/cycles) features using Persistent Homology
+3. **TDA Features**: Extract H1 features using Vietoris-Rips persistence (manual implementation)
 4. **ML Baselines**: Compare with Isolation Forest and One-Class SVM
-5. **Evaluation**: Compare performance using F1-Score, AUC, Precision, Recall
+5. **Evaluation**: Grid search for optimal noise threshold and classification threshold
 
 ---
 
@@ -54,20 +54,22 @@ secom_tda_project/
 │   ├── evaluation.py     # NV5: Evaluation metrics
 │   └── visualization.py  # NV6: Plots and reports
 │
-├── data/                  # Input data (put SECOM files here)
-│   ├── secom.data
-│   └── secom_labels.data
+├── data/                  # Data files
+│   ├── raw/              # Original input data
+│   │   ├── secom.data
+│   │   ├── secom_labels.data
+│   │   └── secom.names
+│   └── processed/        # Output from data cleaning (PCA, POD)
+│       ├── secom_processed_pca2.csv
+│       ├── secom_processed_pca3.csv
+│       ├── secom_processed_pca5.csv
+│       ├── secom_processed_pod5.csv
+│       └── secom_processed_pod95.csv
 │
-└── outputs/               # Generated outputs
-    ├── data_pca.npy
-    ├── windows_dict.npy
-    ├── topo_features.npy
-    ├── topo_scores.npy
-    ├── ml_preds.npy
+└── outputs/               # All pipeline outputs
+    ├── *_L*.pkl          # TDA persistence diagrams
     ├── ablation_results.csv
-    ├── topo_ablation_heatmap.png
-    ├── metric_comparison.png
-    └── analysis_notes.md
+    └── ml_param_log.csv
 ```
 
 ---
@@ -165,24 +167,25 @@ python main.py --viz
 Loads raw SECOM data and performs preprocessing:
 
 1. **Load Data**: Read `secom.data` and `secom_labels.data`
-2. **Handle Missing Values**: Impute NaN with column means
+2. **KNN Imputation**: Impute NaN using K-Nearest Neighbors (k=5)
 3. **Remove Constant Features**: Remove features with zero variance
 4. **Standardize**: Apply StandardScaler (z-score normalization)
-5. **PCA**: Reduce dimensions to [2, 3, 5] components
+5. **PCA/POD**: Reduce dimensions to [2, 3, 5] components + POD variants
 6. **Sliding Windows**: Create time-series windows with sizes [20, 30, 50]
 
-**Output**: `windows_dict.npy` containing preprocessed data
+**Output**: CSV files in `data/processed/` (e.g., `secom_processed_pca2.csv`)
 
 ### Step 2: TDA Features (NV3)
 
-Extracts topological features using Persistent Homology:
+Extracts topological features using Vietoris-Rips persistence:
 
-1. **Rips Filtration**: Build simplicial complexes at multiple scales
-2. **Persistent Homology**: Track H1 (loop) features
-3. **Persistence Scores**: Calculate persistence = death - birth
-4. **Anomaly Threshold**: Use 95th percentile as threshold
+1. **Sliding Windows**: Process each processed CSV with sliding windows
+2. **Vietoris-Rips Complex**: Manual implementation building simplicial complexes
+3. **Persistent Homology**: Track H1 (loop) features
+4. **Noise Filtering**: Filter by noise threshold
+5. **Grid Search**: Find optimal noise and classification thresholds
 
-**Output**: `topo_features.npy`, `topo_scores.npy`, `topo_diagrams.npy`
+**Output**: `.pkl` files in `outputs/` (e.g., `secom_processed_pca2_L20.pkl`)
 
 ### Step 3: ML Baselines (NV4)
 
@@ -191,28 +194,28 @@ Runs traditional ML anomaly detection models:
 1. **Isolation Forest**: With contamination = [0.01, 0.05, 0.07, 0.1]
 2. **One-Class SVM**: With nu = [0.01, 0.05, 0.07, 0.1]
 
-**Output**: `ml_preds.npy`, `ml_param_log.csv`
+**Output**: `ml_preds.npy`, `ml_param_log.csv` in `outputs/`
 
 ### Step 4: Evaluation (NV5)
 
-Evaluates all models using ablation study:
+Evaluates all models using 2D grid search:
 
 - **Metrics**: Precision, Recall, F1-Score, AUC
-- **Configurations**: All combinations of PCA × Window Size × Parameters
+- **Configurations**: All combinations of PCA/POD × Window Size × Noise Threshold
 - **Comparison**: Topology vs. Isolation Forest vs. One-Class SVM
 
-**Output**: `ablation_results.csv`
+**Output**: `ablation_results.csv` in `outputs/`
 
 ### Step 5: Visualization (NV6)
 
 Generates visualizations and reports:
 
-1. **Ablation Heatmap**: F1-Score by PCA and Window Size
+1. **Ablation Heatmap**: F1-Score by PCA/POD and Window Size
 2. **Metric Comparison**: Bar chart comparing models
 3. **Persistence Diagrams**: Side-by-side comparison
 4. **Analysis Notes**: Markdown summary
 
-**Output**: PNG files, PDF report, markdown notes
+**Output**: PNG files, markdown notes
 
 ---
 
@@ -282,33 +285,30 @@ python main.py --all --log-file outputs/pipeline.log
 
 ## Output Files
 
-### Intermediate Data Files
+### Data Folder (`data/`)
+
+| Folder | Description |
+|--------|-------------|
+| `raw/` | Original SECOM data files |
+| `processed/` | Output from data cleaning (PCA, POD results) |
+
+### Processed Data Files (`data/processed/`)
 
 | File | Description |
 |------|-------------|
-| `data_pca.npy` | PCA-transformed data for each n_components |
-| `windows_dict.npy` | Dictionary of sliding windows {n: {L: windows}} |
-| `labels_raw.npy` | Original labels aligned with windows |
-| `topo_features.npy` | TDA features for each window |
-| `topo_scores.npy` | Max persistence scores |
-| `topo_diagrams.npy` | Persistence diagrams |
-| `ml_preds.npy` | ML model predictions |
+| `secom_processed_pca2.csv` | PCA with 2 components |
+| `secom_processed_pca3.csv` | PCA with 3 components |
+| `secom_processed_pca5.csv` | PCA with 5 components |
+| `secom_processed_pod5.csv` | POD with 5 modes |
+| `secom_processed_pod95.csv` | POD with 95% energy |
 
-### Results Files
+### Outputs Folder (`outputs/`)
 
 | File | Description |
 |------|-------------|
+| `secom_processed_*_L*.pkl` | TDA persistence diagrams for each config |
+| `ablation_results.csv` | Full grid search evaluation results |
 | `ml_param_log.csv` | Log of ML parameters tested |
-| `ablation_results.csv` | All evaluation results |
-
-### Visualization Files
-
-| File | Description |
-|------|-------------|
-| `topo_ablation_heatmap.png` | Heatmap of F1-scores |
-| `metric_comparison.png` | Bar chart of best F1 per model |
-| `diagram_sidebyside.pdf` | Persistence diagram comparison |
-| `analysis_notes.md` | Summary and analysis |
 
 ---
 
@@ -364,10 +364,15 @@ python main.py --tda --ml --eval --viz
 
 ### Expected Best Configuration
 
-Based on the original ablation study:
-- **Topology**: PCA=2, L=30, Threshold=95th percentile
-- **Best F1**: ~0.12-0.15
-- **Note**: Low F1 is expected due to highly imbalanced data (~6.6% anomaly)
+Based on ablation study results:
+
+| Model | Best Config | F1-Score | Precision | Recall | AUC |
+|-------|-------------|----------|-----------|--------|-----|
+| **Isolation Forest** | PCA_5D, L=30, cont=0.07 | **0.164** | 0.157 | 0.172 | 0.554 |
+| One-Class SVM | PCA_5D, L=50, cont=0.1 | 0.117 | 0.097 | 0.147 | 0.528 |
+| Topology (TDA) | PCA_3D, L=50 | 0.159 | 0.098 | 0.421 | - |
+
+**Note**: Low F1 is expected due to highly imbalanced data (~6.6% anomaly rate)
 
 ### Interpreting Heatmap
 
