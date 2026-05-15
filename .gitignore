@@ -1,11 +1,14 @@
 # Data - raw input data (user-specific)
-data/raw/
+data/raw/*
+!data/raw/.gitkeep
 
 # Processed data - generated from data cleaning
-data/processed/
+data/processed/*
+!data/processed/.gitkeep
 
 # Outputs - all pipeline results
-outputs/
+outputs/*
+!outputs/.gitkeep
 
 # Python
 __pycache__/
