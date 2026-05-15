@@ -6,6 +6,10 @@ data/raw/*
 data/processed/*
 !data/processed/.gitkeep
 
+# TDA raw features
+data/tda_raw/*
+!data/tda_raw/.gitkeep
+
 # Outputs - all pipeline results
 outputs/*
 !outputs/.gitkeep
