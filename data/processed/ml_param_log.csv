@@ -1,0 +1,73 @@
+dataset,L,model,params
+PCA_5D,20,Isolation Forest,contamination=0.01
+PCA_5D,20,One-Class SVM,"nu=0.01, kernel='rbf', gamma='scale'"
+PCA_5D,20,Isolation Forest,contamination=0.05
+PCA_5D,20,One-Class SVM,"nu=0.05, kernel='rbf', gamma='scale'"
+PCA_5D,20,Isolation Forest,contamination=0.07
+PCA_5D,20,One-Class SVM,"nu=0.07, kernel='rbf', gamma='scale'"
+PCA_5D,20,Isolation Forest,contamination=0.1
+PCA_5D,20,One-Class SVM,"nu=0.1, kernel='rbf', gamma='scale'"
+PCA_5D,30,Isolation Forest,contamination=0.01
+PCA_5D,30,One-Class SVM,"nu=0.01, kernel='rbf', gamma='scale'"
+PCA_5D,30,Isolation Forest,contamination=0.05
+PCA_5D,30,One-Class SVM,"nu=0.05, kernel='rbf', gamma='scale'"
+PCA_5D,30,Isolation Forest,contamination=0.07
+PCA_5D,30,One-Class SVM,"nu=0.07, kernel='rbf', gamma='scale'"
+PCA_5D,30,Isolation Forest,contamination=0.1
+PCA_5D,30,One-Class SVM,"nu=0.1, kernel='rbf', gamma='scale'"
+PCA_5D,50,Isolation Forest,contamination=0.01
+PCA_5D,50,One-Class SVM,"nu=0.01, kernel='rbf', gamma='scale'"
+PCA_5D,50,Isolation Forest,contamination=0.05
+PCA_5D,50,One-Class SVM,"nu=0.05, kernel='rbf', gamma='scale'"
+PCA_5D,50,Isolation Forest,contamination=0.07
+PCA_5D,50,One-Class SVM,"nu=0.07, kernel='rbf', gamma='scale'"
+PCA_5D,50,Isolation Forest,contamination=0.1
+PCA_5D,50,One-Class SVM,"nu=0.1, kernel='rbf', gamma='scale'"
+POD_5D,20,Isolation Forest,contamination=0.01
+POD_5D,20,One-Class SVM,"nu=0.01, kernel='rbf', gamma='scale'"
+POD_5D,20,Isolation Forest,contamination=0.05
+POD_5D,20,One-Class SVM,"nu=0.05, kernel='rbf', gamma='scale'"
+POD_5D,20,Isolation Forest,contamination=0.07
+POD_5D,20,One-Class SVM,"nu=0.07, kernel='rbf', gamma='scale'"
+POD_5D,20,Isolation Forest,contamination=0.1
+POD_5D,20,One-Class SVM,"nu=0.1, kernel='rbf', gamma='scale'"
+POD_5D,30,Isolation Forest,contamination=0.01
+POD_5D,30,One-Class SVM,"nu=0.01, kernel='rbf', gamma='scale'"
+POD_5D,30,Isolation Forest,contamination=0.05
+POD_5D,30,One-Class SVM,"nu=0.05, kernel='rbf', gamma='scale'"
+POD_5D,30,Isolation Forest,contamination=0.07
+POD_5D,30,One-Class SVM,"nu=0.07, kernel='rbf', gamma='scale'"
+POD_5D,30,Isolation Forest,contamination=0.1
+POD_5D,30,One-Class SVM,"nu=0.1, kernel='rbf', gamma='scale'"
+POD_5D,50,Isolation Forest,contamination=0.01
+POD_5D,50,One-Class SVM,"nu=0.01, kernel='rbf', gamma='scale'"
+POD_5D,50,Isolation Forest,contamination=0.05
+POD_5D,50,One-Class SVM,"nu=0.05, kernel='rbf', gamma='scale'"
+POD_5D,50,Isolation Forest,contamination=0.07
+POD_5D,50,One-Class SVM,"nu=0.07, kernel='rbf', gamma='scale'"
+POD_5D,50,Isolation Forest,contamination=0.1
+POD_5D,50,One-Class SVM,"nu=0.1, kernel='rbf', gamma='scale'"
+POD_95,20,Isolation Forest,contamination=0.01
+POD_95,20,One-Class SVM,"nu=0.01, kernel='rbf', gamma='scale'"
+POD_95,20,Isolation Forest,contamination=0.05
+POD_95,20,One-Class SVM,"nu=0.05, kernel='rbf', gamma='scale'"
+POD_95,20,Isolation Forest,contamination=0.07
+POD_95,20,One-Class SVM,"nu=0.07, kernel='rbf', gamma='scale'"
+POD_95,20,Isolation Forest,contamination=0.1
+POD_95,20,One-Class SVM,"nu=0.1, kernel='rbf', gamma='scale'"
+POD_95,30,Isolation Forest,contamination=0.01
+POD_95,30,One-Class SVM,"nu=0.01, kernel='rbf', gamma='scale'"
+POD_95,30,Isolation Forest,contamination=0.05
+POD_95,30,One-Class SVM,"nu=0.05, kernel='rbf', gamma='scale'"
+POD_95,30,Isolation Forest,contamination=0.07
+POD_95,30,One-Class SVM,"nu=0.07, kernel='rbf', gamma='scale'"
+POD_95,30,Isolation Forest,contamination=0.1
+POD_95,30,One-Class SVM,"nu=0.1, kernel='rbf', gamma='scale'"
+POD_95,50,Isolation Forest,contamination=0.01
+POD_95,50,One-Class SVM,"nu=0.01, kernel='rbf', gamma='scale'"
+POD_95,50,Isolation Forest,contamination=0.05
+POD_95,50,One-Class SVM,"nu=0.05, kernel='rbf', gamma='scale'"
+POD_95,50,Isolation Forest,contamination=0.07
+POD_95,50,One-Class SVM,"nu=0.07, kernel='rbf', gamma='scale'"
+POD_95,50,Isolation Forest,contamination=0.1
+POD_95,50,One-Class SVM,"nu=0.1, kernel='rbf', gamma='scale'"

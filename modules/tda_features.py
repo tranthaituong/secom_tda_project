@@ -2,398 +2,473 @@
 Module TDA (Topological Data Analysis) Features - Nhiệm vụ 3 (NV3)
 ===================================================================
 
-Module này trích xuất đặc trưng topological từ dữ liệu SECOM sử dụng
-Persistent Homology để phát hiện anomaly trong quá trình sản xuất bán dẫn.
+Module này trích xuất đặc trưng topological từ dữ liệu SECOM sử dụng:
+1. Vietoris-Rips Filtration (cài đặt thủ công)
+2. Persistent Homology - H1 (loops/cycles)
+3. Lọc nhiễu topo (noise filtering)
+4. Grid search cho ngưỡng lọc nhiễu và ngưỡng phân loại
 
 Lý thuyết:
-- Persistent Homology theo dõi các cấu trúc topological (connected components, 
-  loops, voids) khi thay đổi ngưỡng similarity.
-- H1 (homology dimension 1) bắt các vòng lặp/cycles - phù hợp để phát hiện
-  chu kỳ rung động bất thường trong máy móc.
-- Persistence = Death - Birth: độ bền của cấu trúc topological
-
-Ứng dụng:
-- Trong sản xuất bán dẫn, lỗi máy móc thường biểu hiện qua các chu kỳ rung
-  động bất thường mà H1 có thể bắt được.
+- Persistent Homology theo dõi các cấu trúc topological khi thay đổi ngưỡng similarity.
+- H1 (homology dimension 1) bắt các vòng lặp/cycles.
+- Persistence = Death - Birth: độ bền của cấu trúc topological.
 
 Author: GTMT Project
 """
 
 import logging
+import os
+import pickle
 import numpy as np
+import pandas as pd
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Tuple
+from itertools import combinations
+from tqdm import tqdm
 
-# TDA library - ripser cho persistence homology
-try:
-    from ripser import ripser
-    from persim import plot_diagrams
-    RIPSER_AVAILABLE = True
-except ImportError:
-    RIPSER_AVAILABLE = False
-    logging.warning("Ripser not available. TDA features will use placeholder.")
 
+# ============================================================================
+# ĐƯỜNG DẪN MẶC ĐỊNH
+# ============================================================================
+
+BASE_DIR = Path(__file__).parent.parent
+DEFAULT_PROCESSED_DIR = BASE_DIR / "data" / "processed"
+DEFAULT_TDA_DIR = BASE_DIR / "data" / "tda_raw"
+
+
+# ============================================================================
+# VIETORIS-RIPS PERSISTENCE (CÀI ĐẶT THỦ CÔNG)
+# ============================================================================
+
+class VietorisRipsRaw:
+    """
+    Cài đặt Vietoris-Rips Filtration và Persistent Homology thủ công.
+    
+    Không cần Ripser - sử dụng thuật toán matrix reduction.
+    """
+    
+    def __init__(self, max_dim: int = 1, eps_percentile: int = 60):
+        """
+        Khởi tạo Vietoris-Rips filter.
+        
+        Args:
+            max_dim: Chiều homology tối đa (0=components, 1=loops, 2=triangles)
+            eps_percentile: Phân vị để tính ngưỡng epsilon cho filtration
+        """
+        self.max_dim = max_dim
+        self.eps_percentile = eps_percentile
+    
+    def compute_persistence(self, X: np.ndarray) -> List[np.ndarray]:
+        """
+        Tính Persistent Homology từ point cloud.
+        
+        Args:
+            X: Ma trận điểm với shape (n_points, n_dimensions)
+            
+        Returns:
+            List of persistence diagrams [dgm0, dgm1, ...]
+        """
+        # Tính ma trận khoảng cách Euclidean
+        D = np.sqrt(((X[:, None, :] - X[None, :, :])**2).sum(axis=2))
+        n = D.shape[0]
+        
+        # Tính epsilon từ phân vị khoảng cách
+        tri = D[np.triu_indices(n, k=1)]
+        if len(tri) == 0:
+            return [np.empty((0, 2)), np.empty((0, 2))]
+        
+        eps = np.percentile(tri, self.eps_percentile)
+        
+        # Xây dựng danh sách simplices (filtration)
+        simplices = []
+        
+        # 0-simplices (điểm) - birth = 0
+        for i in range(n):
+            simplices.append((0.0, 0, (i,)))
+        
+        # 1-simplices (cạnh) - birth = khoảng cách
+        for i, j in combinations(range(n), 2):
+            if D[i, j] <= eps:
+                simplices.append((D[i, j], 1, (i, j)))
+        
+        # 2-simplices (tam giác) - birth = max của 3 cạnh
+        if self.max_dim >= 1:
+            for i, j, k in combinations(range(n), 3):
+                d = max(D[i, j], D[i, k], D[j, k])
+                if d <= eps:
+                    simplices.append((d, 2, (i, j, k)))
+        
+        # Sắp xếp theo birth time và dimension
+        simplices.sort(key=lambda s: (s[0], s[1]))
+        
+        # Tạo index map
+        s2i = {s[2]: idx for idx, s in enumerate(simplices)}
+        
+        # Matrix reduction (coboundary matrix)
+        columns = [set() for _ in range(len(simplices))]
+        for j, (_, dim, verts) in enumerate(simplices):
+            if dim > 0:
+                for skip in range(len(verts)):
+                    face = tuple(verts[m] for m in range(len(verts)) if m != skip)
+                    if face in s2i:
+                        columns[j].add(s2i[face])
+        
+        # Reduce coboundary matrix
+        pivot_to_col = {}
+        dgms = [[] for _ in range(self.max_dim + 1)]
+        
+        for j in range(len(columns)):
+            while columns[j]:
+                pivot = max(columns[j])
+                if pivot in pivot_to_col:
+                    columns[j].symmetric_difference_update(columns[pivot_to_col[pivot]])
+                else:
+                    pivot_to_col[pivot] = j
+                    dgms[simplices[pivot][1]].append([simplices[pivot][0], simplices[j][0]])
+                    break
+        
+        return [np.array(d) if len(d) > 0 else np.empty((0, 2)) for d in dgms]
+
+
+# ============================================================================
+# TDA FEATURES VỚI LỌC NHIỄU VÀ GRID SEARCH
+# ============================================================================
 
 class TDAFeatureExtractor:
     """
-    Trích xuất đặc trưng topological sử dụng Persistent Homology.
+    Trích xuất đặc trưng topological với lọc nhiễu.
     
-    Attributes:
-        homology_dimensions: Các chiều đồng đều cần tính (default: [1] cho H1 loops).
-        max_edge: Ngưỡng tối đa cho Rips complex.
-        n_samples: Giới hạn số lượng mẫu để tính toán (None = tất cả).
+    Thuộc tính mới:
+    - eps_percentile: Ngưỡng cho Vietoris-Rips
+    - Grid search cho noise_threshold và classification_threshold
     """
     
     def __init__(
         self,
-        homology_dimensions: List[int] = None,
-        max_edge: float = None,
-        n_samples: int = None,
-        threshold_percentile: float = 95.0
+        eps_percentile: int = 60,
+        max_dim: int = 1,
+        window_sizes: List[int] = None
     ):
-        """
-        Khởi tạo TDA Feature Extractor.
-        
-        Args:
-            homology_dimensions: Danh sách chiều đồng đều (0=components, 1=loops).
-            max_edge: Ngưỡng max cho Rips filtration (auto-calculate nếu None).
-            n_samples: Giới hạn samples (None = tất cả).
-            threshold_percentile: Phân vị để xác định ngưỡng anomaly (default: 95).
-        """
-        self.homology_dimensions = homology_dimensions or [1]
-        self.max_edge = max_edge
-        self.n_samples = n_samples
-        self.threshold_percentile = threshold_percentile
-        
+        self.eps_percentile = eps_percentile
+        self.max_dim = max_dim
+        self.window_sizes = window_sizes or [20, 30, 50]
+        self.rips = VietorisRipsRaw(max_dim=max_dim, eps_percentile=eps_percentile)
         self.logger = logging.getLogger(__name__)
-        self.diagrams_ = {}
-        self.features_ = {}
-        
-    def _check_ripser(self):
-        """Kiểm tra xem ripser có được cài đặt không."""
-        if not RIPSER_AVAILABLE:
-            raise ImportError(
-                "Ripser is required for TDA features. "
-                "Please install: pip install ripser persim"
-            )
+        self.results = {}
     
-    def _compute_rips_persistence(
+    def filter_dgms(
         self,
-        point_cloud: np.ndarray,
-        max_dim: int = 1
+        dgms_list: List,
+        noise_threshold: float
+    ) -> np.ndarray:
+        """
+        Lọc nhiễu topo từ list persistence diagrams.
+        
+        Args:
+            dgms_list: List các diagrams
+            noise_threshold: Ngưỡng lọc (persistence < threshold = nhiễu)
+            
+        Returns:
+            Mảng max persistence đã lọc
+        """
+        filtered_max_pers = []
+        for dgms in dgms_list:
+            h1 = dgms[1] if len(dgms) > 1 else np.empty((0, 2))
+            if h1.size > 0:
+                pers = h1[:, 1] - h1[:, 0]
+                valid_pers = pers[pers > noise_threshold]
+                filtered_max_pers.append(np.max(valid_pers) if valid_pers.size > 0 else 0.0)
+            else:
+                filtered_max_pers.append(0.0)
+        return np.array(filtered_max_pers)
+    
+    def load_processed_data(self, processed_dir = None) -> List[Tuple[str, pd.DataFrame]]:
+        """
+        Load tất cả file CSV đã xử lý từ thư mục processed.
+        
+        Returns:
+            List of (filename, DataFrame) tuples
+        """
+        processed_path = Path(processed_dir) if processed_dir else DEFAULT_PROCESSED_DIR
+        data_files = []
+        
+        csv_files = sorted(processed_path.glob('secom_processed_*.csv'))
+        for f in csv_files:
+            df = pd.read_csv(f)
+            data_files.append((f.stem, df))
+        
+        return data_files
+    
+    def compute_tda_for_file(
+        self,
+        file_name: str,
+        df: pd.DataFrame
     ) -> Dict:
         """
-        Tính Persistent Homology sử dụng Ripser.
+        Tính TDA cho một file đã xử lý.
         
         Args:
-            point_cloud: Ma trận điểm với shape (n_points, n_dimensions).
-            max_dim: Chiều homology tối đa cần tính.
+            file_name: Tên file (không có extension)
+            df: DataFrame với các cột feature và 'Label'
             
         Returns:
-            Dictionary chứa persistence diagrams.
+            Dictionary chứa results cho mỗi window size
         """
-        self._check_ripser()
-        
-        params = {
-            'maxdim': max_dim,
-            'metric': 'euclidean'
-        }
-        
-        if self.max_edge is not None:
-            params['thresh'] = self.max_edge
-        
-        result = ripser(point_cloud, **params)
-        return result['dgms']
-    
-    def _extract_h1_persistence(self, diagram: np.ndarray) -> np.ndarray:
-        """
-        Trích xuất persistence values từ H1 diagram.
-        
-        Persistence = Death - Birth. Giá trị lớn = cấu trúc bền vững.
-        
-        Args:
-            diagram: H1 persistence diagram từ ripser.
-            
-        Returns:
-            Mảng 1D chứa persistence values (bỏ qua infinite persistence).
-        """
-        if len(diagram) == 0:
-            return np.array([0.0])
-        
-        # Bỏ qua điểm có death = inf (không bao giờ chết)
-        finite_diagram = diagram[np.isfinite(diagram[:, 1])]
-        
-        if len(finite_diagram) == 0:
-            return np.array([0.0])
-        
-        # Tính persistence = death - birth
-        persistence = finite_diagram[:, 1] - finite_diagram[:, 0]
-        return persistence
-    
-    def compute_topo_features(
-        self,
-        windows_dict: Dict,
-        verbose: bool = True
-    ) -> Dict:
-        """
-        Tính đặc trưng topological cho tất cả các cấu hình windows.
-        
-        Args:
-            windows_dict: Dictionary lồng nhau {n_components: {L: windows_array}}.
-            verbose: Có in progress không.
-            
-        Returns:
-            Dictionary {n: {L: topo_features_array}}.
-        """
-        self._check_ripser()
-        
-        self.logger.info("=" * 60)
-        self.logger.info("TÍNH ĐẶC TRƯNG TOPOLOGICAL (TDA)")
-        self.logger.info("=" * 60)
-        
-        self.features_ = {}
-        self.diagrams_ = {}
-        
-        for n in sorted(windows_dict.keys()):
-            self.features_[n] = {}
-            self.diagrams_[n] = {}
-            
-            for L in sorted(windows_dict[n].keys()):
-                if verbose:
-                    self.logger.info(f"  - Đang xử lý: PCA(n={n}), L={L}")
-                
-                windows = windows_dict[n][L]
-                n_windows = len(windows)
-                
-                # Giới hạn số lượng windows nếu cần
-                if self.n_samples and n_windows > self.n_samples:
-                    windows = windows[:self.n_samples]
-                
-                topo_features = []
-                diagrams_for_config = []
-                
-                # Tính TDA cho từng window
-                for i, window in enumerate(windows):
-                    # Tính persistence homology
-                    diagrams = self._compute_rips_persistence(window, max_dim=1)
-                    
-                    # Trích xuất H1 persistence
-                    if len(diagrams) > 1 and len(diagrams[1]) > 0:
-                        h1_persistence = self._extract_h1_persistence(diagrams[1])
-                        diagrams_for_config.append(diagrams[1])
-                    else:
-                        h1_persistence = np.array([0.0])
-                    
-                    topo_features.append(h1_persistence)
-                    
-                    if verbose and (i + 1) % 100 == 0:
-                        self.logger.info(f"      Đã xử lý {i + 1}/{n_windows} windows")
-                
-                self.features_[n][L] = topo_features
-                self.diagrams_[n][L] = diagrams_for_config
-                
-                self.logger.info(f"      Hoàn tất: {n_windows} windows")
-        
-        return self.features_
-    
-    def extract_max_persistence(
-        self,
-        features_dict: Dict = None
-    ) -> Dict:
-        """
-        Trích xuất max persistence làm anomaly score cho mỗi window.
-        
-        Ngưỡng 95th percentile thường được dùng để xác định anomaly:
-        - Windows có max persistence > ngưỡng = bất thường
-        
-        Args:
-            features_dict: Dictionary features (dùng self.features_ nếu None).
-            
-        Returns:
-            Dictionary {n: {L: (scores, threshold)}}.
-        """
-        features_dict = features_dict or self.features_
-        
-        self.logger.info("Trích xuất Max Persistence scores...")
+        X = df.drop(columns=['Label']).values
+        y = np.where(df['Label'].values == 1, 1, 0)
         
         results = {}
         
-        for n in sorted(features_dict.keys()):
-            results[n] = {}
+        for L in self.window_sizes:
+            # Tạo sliding windows
+            X_windows = [X[i:i+L] for i in range(len(X) - L + 1)]
+            y_windows = y[L-1:]
             
-            for L in sorted(features_dict[n].keys()):
-                features = features_dict[n][L]
-                max_persistence = []
-                
-                for window_features in features:
-                    if len(window_features) > 0:
-                        max_persistence.append(np.max(window_features))
-                    else:
-                        max_persistence.append(0.0)
-                
-                max_persistence = np.array(max_persistence)
-                threshold = np.percentile(max_persistence, self.threshold_percentile)
-                
-                results[n][L] = {
-                    'scores': max_persistence,
-                    'threshold': threshold
-                }
-                
-                self.logger.info(f"  - PCA(n={n}), L={L}: "
-                               f"threshold={threshold:.4f}")
+            # Tính TDA cho từng window
+            dgms_list = []
+            for window in tqdm(X_windows, desc=f"TDA {file_name} L={L}", leave=False):
+                dgms = self.rips.compute_persistence(window)
+                dgms_list.append(dgms)
+            
+            results[L] = {
+                'dgms': dgms_list,
+                'labels': y_windows,
+                'source': file_name
+            }
         
         return results
     
-    def predict_anomaly(
+    def run_full_tda(
         self,
-        scores_dict: Dict = None,
-        labels_raw: np.ndarray = None
+        processed_dir = None,
+        save_dir = None
     ) -> Dict:
         """
-        Chuyển scores thành nhãn anomaly dựa trên ngưỡng percentile.
+        Chạy TDA cho tất cả file đã xử lý.
         
         Args:
-            scores_dict: Dictionary scores từ extract_max_persistence.
-            labels_raw: Nhãn gốc để đồng bộ với windows (tùy chọn).
+            processed_dir: Thư mục chứa file CSV đã xử lý
+            save_dir: Thư mục lưu kết quả TDA
             
         Returns:
-            Dictionary {n: {L: (predictions, labels_aligned)}}.
+            Dictionary chứa tất cả kết quả
         """
-        scores_dict = scores_dict or self.extract_max_persistence()
+        processed_dir = processed_dir or DEFAULT_PROCESSED_DIR
+        save_dir = save_dir or DEFAULT_TDA_DIR
+        os.makedirs(save_dir, exist_ok=True)
         
-        predictions = {}
+        # Load tất cả file
+        data_files = self.load_processed_data(processed_dir)
         
-        for n in sorted(scores_dict.keys()):
-            predictions[n] = {}
+        all_results = {}
+        
+        for file_name, df in tqdm(data_files, desc="Processing files"):
+            self.logger.info(f"  Xử lý: {file_name}")
+            file_results = self.compute_tda_for_file(file_name, df)
+            all_results[file_name] = file_results
             
-            for L in sorted(scores_dict[n].keys()):
-                scores = scores_dict[n][L]['scores']
-                threshold = scores_dict[n][L]['threshold']
-                
-                # Binary prediction: 1 = anomaly, 0 = normal
-                preds = (scores >= threshold).astype(int)
-                predictions[n][L] = preds
-                
-                n_anomalies = np.sum(preds)
-                self.logger.info(f"  - PCA(n={n}), L={L}: "
-                               f"{n_anomalies}/{len(preds)} windows detected as anomaly")
+            # Lưu từng file
+            for L, result in file_results.items():
+                save_path = os.path.join(save_dir, f"{file_name}_L{L}.pkl")
+                with open(save_path, 'wb') as f:
+                    pickle.dump(result, f)
         
-        return predictions
-    
-    def save_outputs(self, output_dir: str = "outputs") -> Dict:
-        """
-        Lưu các kết quả TDA ra file.
+        self.results = all_results
+        self.logger.info(f"\n[OK] Đã lưu TDA vào {save_dir}/")
         
-        Output files:
-            - topo_features.npy: Dictionary đặc trưng topological
-            - topo_diagrams.npy: Dictionary persistence diagrams
-            - topo_scores.npy: Dictionary max persistence scores
-            
-        Args:
-            output_dir: Thư mục lưu file.
-            
-        Returns:
-            Dictionary đường dẫn các file đã lưu.
-        """
-        output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
-        
-        self.logger.info("Lưu kết quả TDA...")
-        
-        files = {}
-        
-        # Lưu features
-        features_path = output_path / "topo_features.npy"
-        np.save(features_path, self.features_, allow_pickle=True)
-        files['topo_features'] = str(features_path)
-        self.logger.info(f"  - Đã lưu: {features_path}")
-        
-        # Lưu diagrams (chỉ lưu một phần để tiết kiệm space)
-        diagrams_path = output_path / "topo_diagrams.npy"
-        np.save(diagrams_path, self.diagrams_, allow_pickle=True)
-        files['topo_diagrams'] = str(diagrams_path)
-        self.logger.info(f"  - Đã lưu: {diagrams_path}")
-        
-        # Lưu scores
-        scores_dict = self.extract_max_persistence()
-        scores_path = output_path / "topo_scores.npy"
-        np.save(scores_path, scores_dict, allow_pickle=True)
-        files['topo_scores'] = str(scores_path)
-        self.logger.info(f"  - Đã lưu: {scores_path}")
-        
-        return files
+        return all_results
 
 
-class TDAManager:
+class TDAEvaluatorWithGridSearch:
     """
-    Quản lý việc trích xuất và sử dụng TDA features.
-    
-    Cung cấp interface đơn giản để chạy toàn bộ pipeline TDA.
+    Đánh giá TDA với Grid Search cho:
+    - noise_threshold: Ngưỡng lọc nhiễu topo
+    - classification_threshold: Ngưỡng phân loại anomaly
     """
     
     def __init__(
         self,
-        windows_dict_path: str = "outputs/windows_dict.npy",
-        output_dir: str = "outputs"
+        tda_dir = None,
+        n_noise_levels: int = 30,
+        n_threshold_levels: int = 30
     ):
-        """
-        Khởi tạo TDA Manager.
-        
-        Args:
-            windows_dict_path: Đường dẫn file windows_dict.npy từ data_processing.
-            output_dir: Thư mục lưu kết quả.
-        """
-        self.windows_dict_path = windows_dict_path
-        self.output_dir = output_dir
+        self.tda_dir = tda_dir or DEFAULT_TDA_DIR
+        self.n_noise_levels = n_noise_levels
+        self.n_threshold_levels = n_threshold_levels
         self.logger = logging.getLogger(__name__)
+        self.rips = VietorisRipsRaw(max_dim=1, eps_percentile=60)
+    
+    def filter_dgms(self, dgms_list: List, noise_threshold: float) -> np.ndarray:
+        """Lọc nhiễu và trả về max persistence."""
+        filtered_max_pers = []
+        for dgms in dgms_list:
+            h1 = dgms[1] if len(dgms) > 1 else np.empty((0, 2))
+            if h1.size > 0:
+                pers = h1[:, 1] - h1[:, 0]
+                valid_pers = pers[pers > noise_threshold]
+                filtered_max_pers.append(np.max(valid_pers) if valid_pers.size > 0 else 0.0)
+            else:
+                filtered_max_pers.append(0.0)
+        return np.array(filtered_max_pers)
+    
+    def grid_search(self) -> Tuple[List, Dict]:
+        """
+        Grid search 2D để tìm ngưỡng lọc nhiễu và ngưỡng phân loại tối ưu.
         
-    def run_tda_pipeline(
+        Returns:
+            results_table: List of results
+            global_best: Dict với config tốt nhất
+        """
+        from sklearn.metrics import f1_score, precision_score, recall_score
+        
+        tda_files = sorted([f for f in os.listdir(self.tda_dir) if f.endswith('.pkl')])
+        results_table = []
+        global_best = {'f1': -1, 'dgms_sample': None, 'noise': 0, 'threshold': 0, 'title': ''}
+        
+        self.logger.info("🚀 ĐANG QUÉT 2D GRID SEARCH...")
+        
+        for f_name in tda_files:
+            with open(os.path.join(self.tda_dir, f_name), 'rb') as f:
+                data = pickle.load(f)
+            
+            y_true = np.array(data['labels'])
+            
+            # Tìm max persistence để đặt range
+            all_pers = []
+            for dgms in data['dgms']:
+                h1 = dgms[1] if len(dgms) > 1 else np.empty((0, 2))
+                if h1.size > 0:
+                    all_pers.extend(h1[:, 1] - h1[:, 0])
+            
+            max_possible = np.max(all_pers) if all_pers else 0.5
+            
+            # Grid cho noise threshold
+            noise_grid = np.linspace(0.0, max_possible * 0.8, self.n_noise_levels)
+            
+            best_f1, best_p, best_r = -1, 0, 0
+            best_noise, best_t = 0, 0
+            
+            for noise_th in noise_grid:
+                max_pers_array = self.filter_dgms(data['dgms'], noise_th)
+                
+                # Grid cho classification threshold
+                thresholds = np.linspace(
+                    max_pers_array.min() if max_pers_array.min() > 0 else 0,
+                    max_pers_array.max() if max_pers_array.max() > 0 else 1,
+                    self.n_threshold_levels
+                )
+                
+                for t in thresholds:
+                    preds = (max_pers_array > t).astype(int)
+                    f1 = f1_score(y_true, preds, zero_division=0)
+                    
+                    if f1 > best_f1:
+                        best_f1 = f1
+                        best_p = precision_score(y_true, preds, zero_division=0)
+                        best_r = recall_score(y_true, preds, zero_division=0)
+                        best_noise = noise_th
+                        best_t = t
+            
+            results_table.append([
+                data['source'], data['L'],
+                best_f1, best_p, best_r,
+                best_noise, best_t
+            ])
+            
+            # Cập nhật best toàn cục
+            if best_f1 > global_best['f1']:
+                error_indices = np.where(y_true == 1)[0]
+                if len(error_indices) > 0:
+                    global_best = {
+                        'f1': best_f1,
+                        'noise': best_noise,
+                        'threshold': best_t,
+                        'dgms_sample': data['dgms'][error_indices[0]],
+                        'title': f"BEST: {data['source']} | L={data['L']} | Noise={best_noise:.3f} | Thresh={best_t:.3f}"
+                    }
+        
+        return results_table, global_best
+    
+    def print_results(self, results_table: List):
+        """In bảng kết quả."""
+        print("\n" + "="*110)
+        print(f"{'Source Data':<25} | {'L':<4} | {'F1':<8} | {'Precision':<10} | {'Recall':<8} | {'Lọc Nhiễu':<10} | {'Threshold':<10}")
+        print("-" * 110)
+        for res in results_table:
+            print(f"{res[0]:<25} | {res[1]:<4} | {res[2]:.4f} | {res[3]:.4f}    | {res[4]:.4f} | {res[5]:.4f}     | {res[6]:.4f}")
+        print("="*110)
+
+
+# ============================================================================
+# TDAManager (COMPATIBLE VỚI PIPELINE CŨ)
+# ============================================================================
+
+class TDAManager:
+    """
+    Quản lý việc trích xuất TDA features.
+    
+    Interface đơn giản để chạy toàn bộ pipeline TDA.
+    """
+    
+    def __init__(
         self,
-        homology_dimensions: List[int] = None,
-        threshold_percentile: float = 95.0
-    ) -> Dict:
+        processed_dir = None,
+        tda_dir = None,
+        eps_percentile: int = 60,
+        window_sizes: List[int] = None
+    ):
+        self.processed_dir = processed_dir or DEFAULT_PROCESSED_DIR
+        self.tda_dir = tda_dir or DEFAULT_TDA_DIR
+        self.eps_percentile = eps_percentile
+        self.window_sizes = window_sizes or [20, 30, 50]
+        self.logger = logging.getLogger(__name__)
+    
+    def run_tda_pipeline(self) -> Dict:
         """
         Chạy toàn bộ pipeline TDA.
         
-        Args:
-            homology_dimensions: Các chiều homology cần tính.
-            threshold_percentile: Phân vị ngưỡng anomaly.
-            
         Returns:
-            Dictionary chứa kết quả và đường dẫn file.
+            Dictionary chứa kết quả TDA.
         """
         self.logger.info("\n" + "=" * 60)
         self.logger.info("BẮT ĐẦU PIPELINE TDA")
         self.logger.info("=" * 60)
         
-        # Load windows data
-        self.logger.info(f"Đọc windows data từ: {self.windows_dict_path}")
-        data = np.load(self.windows_dict_path, allow_pickle=True)
-        windows_dict = data.item() if hasattr(data, 'item') else data
-        
         # Khởi tạo extractor
         extractor = TDAFeatureExtractor(
-            homology_dimensions=homology_dimensions,
-            threshold_percentile=threshold_percentile
+            eps_percentile=self.eps_percentile,
+            window_sizes=self.window_sizes
         )
         
-        # Tính features
-        extractor.compute_topo_features(windows_dict)
-        
-        # Lưu outputs
-        saved_files = extractor.save_outputs(self.output_dir)
+        # Chạy TDA
+        results = extractor.run_full_tda(
+            processed_dir=self.processed_dir,
+            save_dir=self.tda_dir
+        )
         
         self.logger.info("\n" + "=" * 60)
         self.logger.info("HOÀN TẤT PIPELINE TDA")
         self.logger.info("=" * 60)
         
-        return {
-            'features': extractor.features_,
-            'diagrams': extractor.diagrams_,
-            'scores': extractor.extract_max_persistence(),
-            'saved_files': saved_files
-        }
+        return results
+    
+    def run_evaluation(self) -> Tuple[List, Dict]:
+        """
+        Chạy grid search evaluation.
+        
+        Returns:
+            (results_table, global_best)
+        """
+        evaluator = TDAEvaluatorWithGridSearch(tda_dir=self.tda_dir)
+        results_table, global_best = evaluator.grid_search()
+        evaluator.print_results(results_table)
+        
+        return results_table, global_best
 
+
+# ============================================================================
+# MAIN
+# ============================================================================
 
 def main():
     """
@@ -404,25 +479,39 @@ def main():
     """
     import argparse
     
+    base_dir = Path(__file__).parent.parent
+    default_processed = base_dir / "data" / "processed"
+    default_tda = base_dir / "data" / "tda_raw"
+    
     parser = argparse.ArgumentParser(description='Trích xuất đặc trưng TDA')
-    parser.add_argument('--windows', default='outputs/windows_dict.npy',
-                       help='Đường dẫn windows_dict.npy')
-    parser.add_argument('--output', default='outputs', help='Thư mục output')
-    parser.add_argument('--percentile', type=float, default=95.0,
-                       help='Phan vi nguong anomaly')
+    parser.add_argument('--processed-dir', default=str(default_processed),
+                       help='Thư mục chứa file CSV đã xử lý')
+    parser.add_argument('--tda-dir', default=str(default_tda),
+                       help='Thư mục lưu kết quả TDA')
+    parser.add_argument('--eps', type=int, default=60,
+                       help='Phân vị cho epsilon (default: 60)')
+    parser.add_argument('--windows', nargs='+', type=int, default=[20, 30, 50],
+                       help='Danh sách kích thước window')
+    parser.add_argument('--eval', action='store_true',
+                       help='Chạy evaluation sau khi tính TDA')
     
     args = parser.parse_args()
     
     manager = TDAManager(
-        windows_dict_path=args.windows,
-        output_dir=args.output
+        processed_dir=args.processed_dir,
+        tda_dir=args.tda_dir,
+        eps_percentile=args.eps,
+        window_sizes=args.windows
     )
     
-    results = manager.run_tda_pipeline(threshold_percentile=args.percentile)
+    # Chạy TDA
+    manager.run_tda_pipeline()
     
-    return results
+    # Chạy evaluation nếu được yêu cầu
+    if args.eval:
+        manager.run_evaluation()
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO, format='%(message)s')
     main()

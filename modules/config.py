@@ -9,6 +9,7 @@ Có thể import và sử dụng trong các module khác.
 from pathlib import Path
 from typing import List
 
+
 # =============================================================================
 # Paths
 # =============================================================================
@@ -16,32 +17,19 @@ from typing import List
 # Base paths
 BASE_DIR = Path(__file__).parent.parent
 DATA_DIR = BASE_DIR / "data"
+PROCESSED_DIR = DATA_DIR / "processed"
 OUTPUT_DIR = BASE_DIR / "outputs"
 
 # Data files
-SECOM_DATA_FILE = DATA_DIR / "secom.data"
-SECOM_LABELS_FILE = DATA_DIR / "secom_labels.data"
+SECOM_DATA_FILE = DATA_DIR / "raw" / "secom.data"
+SECOM_LABELS_FILE = DATA_DIR / "raw" / "secom_labels.data"
 
-# Output files
-PCA_DATA_FILE = OUTPUT_DIR / "data_pca.npy"
-WINDOWS_DICT_FILE = OUTPUT_DIR / "windows_dict.npy"
-LABELS_RAW_FILE = OUTPUT_DIR / "labels_raw.npy"
-TOPO_FEATURES_FILE = OUTPUT_DIR / "topo_features.npy"
-TOPO_SCORES_FILE = OUTPUT_DIR / "topo_scores.npy"
-TOPO_DIAGRAMS_FILE = OUTPUT_DIR / "topo_diagrams.npy"
-ML_PREDS_FILE = OUTPUT_DIR / "ml_preds.npy"
-ML_PARAM_LOG_FILE = OUTPUT_DIR / "ml_param_log.csv"
-ABLATION_RESULTS_FILE = OUTPUT_DIR / "ablation_results.csv"
-
-# Visualization outputs
-TOPO_HEATMAP_FILE = OUTPUT_DIR / "topo_ablation_heatmap.png"
-METRIC_COMPARISON_FILE = OUTPUT_DIR / "metric_comparison.png"
-DIAGRAM_PDF_FILE = OUTPUT_DIR / "diagram_sidebyside.pdf"
-ANALYSIS_NOTES_FILE = OUTPUT_DIR / "analysis_notes.md"
+# Intermediate directories
+TDA_RAW_DIR = DATA_DIR / "tda_raw"
 
 
 # =============================================================================
-# Data Processing Parameters (NV1)
+# NV1: Data Processing Parameters
 # =============================================================================
 
 # Số lượng thành phần PCA để thử nghiệm
@@ -53,12 +41,33 @@ DEFAULT_WINDOW_SIZES: List[int] = [20, 30, 50]
 # Bước nhảy giữa các windows
 DEFAULT_STRIDE: int = 1
 
+# Ngưỡng NaN (loại bỏ cột có NaN > threshold)
+NAN_THRESHOLD: float = 0.50
+
+# Số láng giềng cho KNNImputer
+KNN_NEIGHBORS: int = 5
+
+
 # =============================================================================
-# TDA Parameters (NV3)
+# NV1: POD Parameters
+# =============================================================================
+
+# Số Mode cố định cho POD_5D
+N_POD_FIXED: int = 5
+
+# Ngưỡng năng lượng cho POD_95
+ENERGY_TARGET: float = 0.95
+
+
+# =============================================================================
+# NV3: TDA Parameters
 # =============================================================================
 
 # Chiều homology cần tính (0=components, 1=loops/cycles)
 DEFAULT_HOMOLOGY_DIMENSIONS: List[int] = [1]  # Chỉ H1
+
+# Phân vị để tính epsilon cho Vietoris-Rips
+DEFAULT_EPS_PERCENTILE: int = 60
 
 # Phân vị để xác định ngưỡng anomaly
 # Ngưỡng 95% nghĩa là top 5% persistence scores được coi là anomaly
@@ -72,9 +81,13 @@ DEFAULT_MAX_EDGE: float = None
 # Giảm giá trị này nếu bộ nhớ không đủ
 DEFAULT_MAX_SAMPLES: int = None
 
+# Grid search parameters
+GRID_SEARCH_NOISE_LEVELS: int = 30
+GRID_SEARCH_THRESHOLD_LEVELS: int = 30
+
 
 # =============================================================================
-# ML Baseline Parameters (NV4)
+# NV4: ML Baseline Parameters
 # =============================================================================
 
 # Các giá trị contamination (tỷ lệ anomaly ước tính) để thử nghiệm
@@ -94,7 +107,7 @@ DEFAULT_SVM_GAMMA: str = 'scale'
 
 
 # =============================================================================
-# Evaluation Parameters (NV5)
+# NV5: Evaluation Parameters
 # =============================================================================
 
 # Average method cho metrics ('binary', 'micro', 'macro', 'weighted')
@@ -102,7 +115,7 @@ DEFAULT_AVERAGE_METHOD: str = 'binary'
 
 
 # =============================================================================
-# Visualization Parameters (NV6)
+# NV6: Visualization Parameters
 # =============================================================================
 
 # Figure sizes (width, height) in inches
@@ -115,6 +128,18 @@ DEFAULT_DPI: int = 300
 
 # Số frames hiển thị trong persistence diagram comparison
 DEFAULT_N_FRAMES_DISPLAY: int = 5
+
+
+# =============================================================================
+# ML Datasets Mapping
+# =============================================================================
+
+# Các file dữ liệu đã xử lý để chạy ML baselines
+ML_DATASETS: dict = {
+    'PCA_5D': 'secom_processed_pca5.csv',
+    'POD_5D': 'secom_processed_pod5.csv',
+    'POD_95': 'secom_processed_pod95.csv'
+}
 
 
 # =============================================================================
@@ -136,12 +161,21 @@ class PipelineConfig:
         self.pca_components = DEFAULT_PCA_COMPONENTS.copy()
         self.window_sizes = DEFAULT_WINDOW_SIZES.copy()
         self.stride = DEFAULT_STRIDE
+        self.nan_threshold = NAN_THRESHOLD
+        self.knn_neighbors = KNN_NEIGHBORS
+        
+        # POD Parameters
+        self.n_pod_fixed = N_POD_FIXED
+        self.energy_target = ENERGY_TARGET
         
         # TDA
         self.homology_dimensions = DEFAULT_HOMOLOGY_DIMENSIONS.copy()
+        self.eps_percentile = DEFAULT_EPS_PERCENTILE
         self.threshold_percentile = DEFAULT_THRESHOLD_PERCENTILE
         self.max_edge = DEFAULT_MAX_EDGE
         self.max_samples = DEFAULT_MAX_SAMPLES
+        self.grid_noise_levels = GRID_SEARCH_NOISE_LEVELS
+        self.grid_threshold_levels = GRID_SEARCH_THRESHOLD_LEVELS
         
         # ML Baselines
         self.contamination_values = DEFAULT_CONTAMINATION_VALUES.copy()
@@ -152,15 +186,24 @@ class PipelineConfig:
         
         # Paths
         self.data_dir = DATA_DIR
+        self.processed_dir = PROCESSED_DIR
         self.output_dir = OUTPUT_DIR
+        self.tda_raw_dir = TDA_RAW_DIR
         
+        # ML Datasets
+        self.ml_datasets = ML_DATASETS.copy()
+    
     def to_dict(self) -> dict:
         """Chuyển cấu hình thành dictionary."""
         return {
             'pca_components': self.pca_components,
             'window_sizes': self.window_sizes,
             'stride': self.stride,
-            'homology_dimensions': self.homology_dimensions,
+            'nan_threshold': self.nan_threshold,
+            'knn_neighbors': self.knn_neighbors,
+            'n_pod_fixed': self.n_pod_fixed,
+            'energy_target': self.energy_target,
+            'eps_percentile': self.eps_percentile,
             'threshold_percentile': self.threshold_percentile,
             'contamination_values': self.contamination_values,
             'random_state': self.random_state,

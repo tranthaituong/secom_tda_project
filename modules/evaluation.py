@@ -1,9 +1,9 @@
 """
 Module Evaluation - Nhiệm vụ 5 (NV5)
-====================================
+=====================================
 
 Module này đánh giá hiệu suất của các phương pháp:
-1. Topology (H1) - TDA-based anomaly detection
+1. Topology (H1) - TDA-based anomaly detection với Grid Search
 2. Isolation Forest (ISO) - ML baseline
 3. One-Class SVM (SVM) - ML baseline
 
@@ -22,6 +22,8 @@ Author: GTMT Project
 """
 
 import logging
+import os
+import pickle
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -29,10 +31,23 @@ from typing import Dict, List, Optional, Tuple, Any
 from sklearn.metrics import (
     precision_recall_fscore_support,
     roc_auc_score,
-    confusion_matrix,
-    classification_report
+    confusion_matrix
 )
 
+
+# ============================================================================
+# ĐƯỜNG DẪN MẶC ĐỊNH
+# ============================================================================
+
+BASE_DIR = Path(__file__).parent.parent
+DEFAULT_TDA_DIR = BASE_DIR / "data" / "tda_raw"
+DEFAULT_PROCESSED_DIR = BASE_DIR / "data" / "processed"
+DEFAULT_OUTPUT_DIR = BASE_DIR / "outputs"
+
+
+# ============================================================================
+# METRICS
+# ============================================================================
 
 def calculate_all_metrics(
     y_true: np.ndarray,
@@ -55,7 +70,6 @@ def calculate_all_metrics(
     try:
         auc = roc_auc_score(y_true, y_pred)
     except ValueError:
-        # Trường hợp chỉ có 1 lớp trong dữ liệu
         auc = 0.5
     
     return precision, recall, f1, auc
@@ -65,16 +79,7 @@ def calculate_confusion_matrix(
     y_true: np.ndarray,
     y_pred: np.ndarray
 ) -> Dict[str, int]:
-    """
-    Tính confusion matrix và trả về dạng dictionary.
-    
-    Args:
-        y_true: Nhãn thực tế.
-        y_pred: Nhãn dự đoán.
-        
-    Returns:
-        Dictionary với TN, FP, FN, TP.
-    """
+    """Tính confusion matrix và trả về dạng dictionary."""
     tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
     return {
         'TN': int(tn),
@@ -84,97 +89,168 @@ def calculate_confusion_matrix(
     }
 
 
-class EvaluationMetrics:
+# ============================================================================
+# TDA EVALUATION WITH GRID SEARCH
+# ============================================================================
+
+class TDAEvaluator:
     """
-    Tính toán và lưu trữ các metrics cho tất cả models và configurations.
+    Đánh giá TDA với Grid Search cho noise_threshold và classification_threshold.
     """
     
-    def __init__(self):
-        """Khởi tạo EvaluationMetrics."""
-        self.results_ = []
-        self.best_by_model_ = {}
-        
-    def add_result(
+    def __init__(
         self,
-        model: str,
-        n: int,
-        L: int,
-        param: str,
-        y_true: np.ndarray,
-        y_pred: np.ndarray,
-        topo_score: np.ndarray = None
+        tda_dir = None,
+        n_noise_levels: int = 30,
+        n_threshold_levels: int = 30
     ):
+        self.tda_dir = tda_dir or DEFAULT_TDA_DIR
+        self.n_noise_levels = n_noise_levels
+        self.n_threshold_levels = n_threshold_levels
+        self.logger = logging.getLogger(__name__)
+    
+    def filter_dgms(self, dgms_list: List, noise_threshold: float) -> np.ndarray:
+        """Lọc nhiễu và trả về max persistence."""
+        filtered_max_pers = []
+        for dgms in dgms_list:
+            h1 = dgms[1] if len(dgms) > 1 else np.empty((0, 2))
+            if h1.size > 0:
+                pers = h1[:, 1] - h1[:, 0]
+                valid_pers = pers[pers > noise_threshold]
+                filtered_max_pers.append(np.max(valid_pers) if valid_pers.size > 0 else 0.0)
+            else:
+                filtered_max_pers.append(0.0)
+        return np.array(filtered_max_pers)
+    
+    def evaluate_all(self) -> Tuple[List, Dict]:
         """
-        Thêm kết quả đánh giá cho một model.
+        Grid search để tìm ngưỡng tối ưu.
         
-        Args:
-            model: Tên model ('Topology', 'ISO', 'SVM').
-            n: Số PCA components.
-            L: Kích thước window.
-            param: Tham số model (contamination/threshold).
-            y_true: Nhãn thực tế (0/1).
-            y_pred: Nhãn dự đoán (0/1).
-            topo_score: Scores cho Topology model (nếu có).
+        Returns:
+            (results_table, global_best)
         """
-        precision, recall, f1, auc = calculate_all_metrics(y_true, y_pred)
-        cm = calculate_confusion_matrix(y_true, y_pred)
+        from sklearn.metrics import f1_score, precision_score, recall_score
         
-        result = {
-            'Model': model,
-            'n': n,
-            'L': L,
-            'Param': param,
-            'Precision': precision,
-            'Recall': recall,
-            'F1': f1,
-            'AUC': auc,
-            **cm
+        tda_files = sorted([f for f in os.listdir(self.tda_dir) if f.endswith('.pkl')])
+        results_table = []
+        global_best = {
+            'f1': -1, 'precision': 0, 'recall': 0,
+            'noise': 0, 'threshold': 0, 'source': '', 'L': 0
         }
         
-        self.results_.append(result)
-    
-    def get_dataframe(self) -> pd.DataFrame:
-        """
-        Trả về DataFrame chứa tất cả kết quả.
+        self.logger.info("🚀 GRID SEARCH cho TDA...")
         
-        Returns:
-            DataFrame với các cột: Model, n, L, Param, Precision, Recall, F1, AUC.
-        """
-        return pd.DataFrame(self.results_)
-    
-    def get_best_by_model(self) -> pd.DataFrame:
-        """
-        Lấy kết quả tốt nhất (theo F1) cho mỗi model.
+        for f_name in tda_files:
+            # Trích xuất L từ tên file (ví dụ: secom_processed_pca2_L20.pkl -> L=20)
+            import re
+            L_match = re.search(r'_L(\d+)', f_name)
+            L = int(L_match.group(1)) if L_match else 0
+            
+            with open(os.path.join(self.tda_dir, f_name), 'rb') as f:
+                data = pickle.load(f)
+            
+            y_true = np.array(data['labels'])
+            
+            # Tìm max persistence range
+            all_pers = []
+            for dgms in data['dgms']:
+                h1 = dgms[1] if len(dgms) > 1 else np.empty((0, 2))
+                if h1.size > 0:
+                    all_pers.extend(h1[:, 1] - h1[:, 0])
+            
+            max_possible = np.max(all_pers) if all_pers else 0.5
+            
+            # Grid search
+            noise_grid = np.linspace(0.0, max_possible * 0.8, self.n_noise_levels)
+            
+            best_f1, best_p, best_r = -1, 0, 0
+            best_noise, best_t = 0, 0
+            
+            for noise_th in noise_grid:
+                max_pers_array = self.filter_dgms(data['dgms'], noise_th)
+                
+                min_val = max_pers_array.min() if max_pers_array.min() > 0 else 0
+                max_val = max_pers_array.max() if max_pers_array.max() > 0 else 1
+                
+                thresholds = np.linspace(min_val, max_val, self.n_threshold_levels)
+                
+                for t in thresholds:
+                    preds = (max_pers_array > t).astype(int)
+                    f1 = f1_score(y_true, preds, zero_division=0)
+                    
+                    if f1 > best_f1:
+                        best_f1 = f1
+                        best_p = precision_score(y_true, preds, zero_division=0)
+                        best_r = recall_score(y_true, preds, zero_division=0)
+                        best_noise = noise_th
+                        best_t = t
+            
+            results_table.append([
+                data['source'], L,
+                best_f1, best_p, best_r,
+                best_noise, best_t
+            ])
+            
+            if best_f1 > global_best['f1']:
+                global_best = {
+                    'f1': best_f1,
+                    'precision': best_p,
+                    'recall': best_r,
+                    'noise': best_noise,
+                    'threshold': best_t,
+                    'source': data['source'],
+                    'L': L
+                }
         
-        Returns:
-            DataFrame với best config cho mỗi model.
-        """
-        df = self.get_dataframe()
-        self.best_by_model_ = df.loc[df.groupby('Model')['F1'].idxmax()]
-        return self.best_by_model_
-    
-    def get_best_overall(self) -> Dict[str, Any]:
-        """
-        Lấy kết quả tốt nhất trong tất cả các models.
-        
-        Returns:
-            Dictionary chứa best config và metrics.
-        """
-        df = self.get_dataframe()
-        best_idx = df['F1'].idxmax()
-        best_row = df.loc[best_idx]
-        return best_row.to_dict()
-    
-    def save_results(self, output_path: str):
-        """
-        Lưu kết quả ra file CSV.
-        
-        Args:
-            output_path: Đường dẫn file CSV.
-        """
-        df = self.get_dataframe()
-        df.to_csv(output_path, index=False)
+        return results_table, global_best
 
+
+# ============================================================================
+# ML EVALUATION
+# ============================================================================
+
+class MLEvaluator:
+    """
+    Đánh giá ML baselines từ file ml_preds.npy.
+    """
+    
+    def __init__(
+        self,
+        ml_preds_path: str = 'data/processed/ml_preds.npy'
+    ):
+        self.ml_preds_path = ml_preds_path
+        self.logger = logging.getLogger(__name__)
+    
+    def evaluate_all(self) -> List:
+        """Đánh giá tất cả các cấu hình ML."""
+        data = np.load(self.ml_preds_path, allow_pickle=True).item()
+        
+        results_table = []
+        contamination_values = [0.01, 0.05, 0.07, 0.1]
+        
+        for model_key, model_name in [('iso', 'ISO'), ('svm', 'SVM')]:
+            for dataset_name in data[model_key].keys():
+                for L in data[model_key][dataset_name].keys():
+                    y_true = data['labels_true'][dataset_name][L]
+                    y_binary = np.where(y_true == 1, 1, 0)
+                    
+                    for fraction in contamination_values:
+                        y_pred = data[model_key][dataset_name][L][fraction]
+                        y_pred_binary = np.where(y_pred == 1, 1, 0)
+                        
+                        precision, recall, f1, auc = calculate_all_metrics(y_binary, y_pred_binary)
+                        
+                        results_table.append([
+                            model_name, dataset_name, L, fraction,
+                            f1, precision, recall, auc
+                        ])
+        
+        return results_table
+
+
+# ============================================================================
+# COMBINED EVALUATION
+# ============================================================================
 
 class AblationStudyEvaluator:
     """
@@ -183,198 +259,18 @@ class AblationStudyEvaluator:
     
     def __init__(
         self,
-        topo_scores_path: str = "outputs/topo_scores.npy",
-        ml_preds_path: str = "outputs/ml_preds.npy",
-        output_dir: str = "outputs"
+        tda_dir = None,
+        ml_output_dir = None,
+        output_dir = None
     ):
-        """
-        Khởi tạo Ablation Study Evaluator.
-        
-        Args:
-            topo_scores_path: Đường dẫn file topo_scores.npy.
-            ml_preds_path: Đường dẫn file ml_preds.npy.
-            output_dir: Thư mục lưu kết quả.
-        """
-        self.topo_scores_path = topo_scores_path
-        self.ml_preds_path = ml_preds_path
-        self.output_dir = Path(output_dir)
+        self.tda_dir = tda_dir or DEFAULT_TDA_DIR
+        self.ml_output_dir = ml_output_dir or DEFAULT_PROCESSED_DIR
+        self.output_dir = Path(output_dir) if output_dir else DEFAULT_OUTPUT_DIR
         self.logger = logging.getLogger(__name__)
-        
-        self.topo_data_ = None
-        self.ml_data_ = None
-        self.evaluator_ = EvaluationMetrics()
-        
-    def load_data(self):
-        """Load dữ liệu từ các file đã lưu."""
-        self.logger.info("Đọc dữ liệu đánh giá...")
-        
-        # Load TDA scores
-        topo_scores_data = np.load(self.topo_scores_path, allow_pickle=True)
-        self.topo_data_ = topo_scores_data.item() if hasattr(topo_scores_data, 'item') else topo_scores_data
-        
-        # Load ML predictions
-        ml_data = np.load(self.ml_preds_path, allow_pickle=True)
-        self.ml_data_ = ml_data.item() if hasattr(ml_data, 'item') else ml_data
-        
-        self.logger.info("  - Đã load TDA scores và ML predictions")
-    
-    def _align_labels_for_windows(
-        self,
-        y_orig: np.ndarray,
-        window_size: int,
-        stride: int = 1
-    ) -> np.ndarray:
-        """Căn chỉnh nhãn với sliding windows."""
-        aligned = []
-        for i in range(0, len(y_orig) - window_size + 1, stride):
-            aligned.append(y_orig[i + window_size - 1])
-        return np.array(aligned)
-    
-    def _convert_to_binary(
-        self,
-        y: np.ndarray,
-        positive_val: int = 1
-    ) -> np.ndarray:
-        """Chuyển nhãn về binary (0/1)."""
-        return np.where(y == positive_val, 1, 0)
-    
-    def evaluate_topo(self, threshold_percentile: float = 95.0) -> Dict:
-        """
-        Đánh giá mô hình Topology (H1).
-        
-        Args:
-            threshold_percentile: Phân vị để xác định ngưỡng anomaly.
-            
-        Returns:
-            Dictionary kết quả đánh giá.
-        """
-        self.logger.info("=" * 60)
-        self.logger.info("ĐÁNH GIÁ TOPOLOGY (H1)")
-        self.logger.info("=" * 60)
-        
-        # Load labels
-        labels_path = self.output_dir / "labels_raw.npy"
-        if labels_path.exists():
-            y_orig = np.load(labels_path)
-        else:
-            self.logger.warning("Labels file not found, using default")
-            return {}
-        
-        topo_results = {}
-        
-        for n in sorted(self.topo_data_.keys()):
-            topo_results[n] = {}
-            
-            for L in sorted(self.topo_data_[n].keys()):
-                # Lấy scores
-                scores_data = self.topo_data_[n][L]
-                if isinstance(scores_data, dict):
-                    scores = scores_data['scores']
-                    threshold = scores_data['threshold']
-                else:
-                    scores = scores_data
-                    threshold = np.percentile(scores, threshold_percentile)
-                
-                # Chuyển scores thành binary predictions
-                preds = (scores >= threshold).astype(int)
-                
-                # Căn chỉnh labels
-                y_aligned = self._align_labels_for_windows(y_orig, L)
-                y_binary = self._convert_to_binary(y_aligned)
-                
-                # Tính metrics
-                precision, recall, f1, auc = calculate_all_metrics(y_binary, preds)
-                
-                self.evaluator_.add_result(
-                    model='Topology',
-                    n=n,
-                    L=L,
-                    param=f'Threshold={threshold:.3f}',
-                    y_true=y_binary,
-                    y_pred=preds
-                )
-                
-                topo_results[n][L] = {
-                    'precision': precision,
-                    'recall': recall,
-                    'f1': f1,
-                    'auc': auc,
-                    'threshold': threshold
-                }
-                
-                self.logger.info(
-                    f"  PCA(n={n}), L={L}: "
-                    f"F1={f1:.4f}, AUC={auc:.4f}"
-                )
-        
-        return topo_results
-    
-    def evaluate_ml_baselines(self) -> Dict:
-        """
-        Đánh giá các mô hình ML Baselines (ISO, SVM).
-        
-        Returns:
-            Dictionary kết quả đánh giá.
-        """
-        self.logger.info("=" * 60)
-        self.logger.info("ĐÁNH GIÁ ML BASELINES")
-        self.logger.info("=" * 60)
-        
-        # Load labels
-        labels_path = self.output_dir / "labels_raw.npy"
-        y_orig = np.load(labels_path)
-        
-        ml_results = {'ISO': {}, 'SVM': {}}
-        contamination_values = [0.01, 0.05, 0.07, 0.1]
-        
-        for model_name in ['ISO', 'SVM']:
-            for n in sorted(self.ml_data_[model_name.lower()].keys()):
-                ml_results[model_name][n] = {}
-                
-                for L in sorted(self.ml_data_[model_name.lower()][n].keys()):
-                    ml_results[model_name][n][L] = {}
-                    
-                    for fraction in contamination_values:
-                        # Lấy predictions
-                        preds_raw = self.ml_data_[model_name.lower()][n][L][fraction]
-                        preds = self._convert_to_binary(preds_raw)
-                        
-                        # Căn chỉnh labels
-                        y_aligned = self._align_labels_for_windows(y_orig, L)
-                        y_binary = self._convert_to_binary(y_aligned)
-                        
-                        # Tính metrics
-                        precision, recall, f1, auc = calculate_all_metrics(
-                            y_binary, preds
-                        )
-                        
-                        self.evaluator_.add_result(
-                            model=model_name,
-                            n=n,
-                            L=L,
-                            param=str(fraction),
-                            y_true=y_binary,
-                            y_pred=preds
-                        )
-                        
-                        ml_results[model_name][n][L][fraction] = {
-                            'precision': precision,
-                            'recall': recall,
-                            'f1': f1,
-                            'auc': auc
-                        }
-                        
-                        self.logger.info(
-                            f"  {model_name}(n={n}), L={L}, "
-                            f"contamination={fraction}: "
-                            f"F1={f1:.4f}, AUC={auc:.4f}"
-                        )
-        
-        return ml_results
     
     def run_full_evaluation(self) -> Dict:
         """
-        Chạy đánh giá đầy đủ cho tất cả các models.
+        Chạy đánh giá đầy đủ.
         
         Returns:
             Dictionary chứa tất cả kết quả đánh giá.
@@ -383,47 +279,86 @@ class AblationStudyEvaluator:
         self.logger.info("BẮT ĐẦU ABLATION STUDY ĐÁNH GIÁ")
         self.logger.info("=" * 60)
         
-        # Load data
-        self.load_data()
+        all_results = []
         
-        # Đánh giá Topology
-        topo_results = self.evaluate_topo()
+        # 1. Đánh giá TDA với Grid Search
+        self.logger.info("\n--- ĐÁNH GIÁ TDA (Grid Search) ---")
+        tda_evaluator = TDAEvaluator(tda_dir=self.tda_dir)
+        tda_results, tda_best = tda_evaluator.evaluate_all()
         
-        # Đánh giá ML Baselines
-        ml_results = self.evaluate_ml_baselines()
+        for res in tda_results:
+            all_results.append({
+                'Model': 'Topology',
+                'Source': res[0],
+                'L': res[1],
+                'F1': res[2],
+                'Precision': res[3],
+                'Recall': res[4],
+                'Noise_Threshold': res[5],
+                'Class_Threshold': res[6]
+            })
         
-        # Lưu kết quả
+        # In bảng kết quả TDA
+        print("\n" + "="*110)
+        print(f"{'Source Data':<25} | {'L':<4} | {'F1':<8} | {'Precision':<10} | {'Recall':<8} | {'Noise':<10} | {'Threshold':<10}")
+        print("-" * 110)
+        for res in tda_results:
+            print(f"{res[0]:<25} | {res[1]:<4} | {res[2]:.4f} | {res[3]:.4f}    | {res[4]:.4f} | {res[5]:.4f}     | {res[6]:.4f}")
+        print("="*110)
+        
+        # 2. Đánh giá ML
+        self.logger.info("\n--- ĐÁNH GIÁ ML BASELINES ---")
+        ml_preds_path = os.path.join(self.ml_output_dir, 'ml_preds.npy')
+        
+        if os.path.exists(ml_preds_path):
+            ml_evaluator = MLEvaluator(ml_preds_path=ml_preds_path)
+            ml_results = ml_evaluator.evaluate_all()
+            
+            for res in ml_results:
+                all_results.append({
+                    'Model': res[0],
+                    'Source': res[1],
+                    'L': res[2],
+                    'Param': res[3],
+                    'F1': res[4],
+                    'Precision': res[5],
+                    'Recall': res[6],
+                    'AUC': res[7]
+                })
+        
+        # Tạo DataFrame và lưu
+        df = pd.DataFrame(all_results)
         results_path = self.output_dir / "ablation_results.csv"
-        self.evaluator_.save_results(str(results_path))
+        df.to_csv(results_path, index=False)
         self.logger.info(f"\nĐã lưu kết quả: {results_path}")
         
         # Tổng kết
-        best_overall = self.evaluator_.get_best_overall()
-        best_df = self.evaluator_.get_best_by_model()
-        
         self.logger.info("\n" + "=" * 60)
         self.logger.info("KẾT QUẢ TỔNG KẾT")
         self.logger.info("=" * 60)
         
-        self.logger.info("\nBest F1 theo Model:")
-        for _, row in best_df.iterrows():
-            self.logger.info(
-                f"  {row['Model']}: n={row['n']}, L={row['L']}, "
-                f"F1={row['F1']:.4f}, AUC={row['AUC']:.4f}"
-            )
+        # Best TDA
+        self.logger.info(f"\nBest TDA: {tda_best['source']}, L={tda_best['L']}")
+        self.logger.info(f"  F1={tda_best['f1']:.4f}, Precision={tda_best['precision']:.4f}, Recall={tda_best['recall']:.4f}")
         
-        self.logger.info(f"\nBest Overall: {best_overall['Model']} "
-                       f"(n={best_overall['n']}, L={best_overall['L']}) "
-                       f"với F1={best_overall['F1']:.4f}")
+        # Best ML
+        if len(df[df['Model'] != 'Topology']) > 0:
+            best_ml = df[df['Model'] != 'Topology'].loc[df[df['Model'] != 'Topology']['F1'].idxmax()]
+            self.logger.info(f"\nBest ML: {best_ml['Model']}, {best_ml['Source']}, L={best_ml['L']}")
+            self.logger.info(f"  F1={best_ml['F1']:.4f}")
         
         return {
-            'topology': topo_results,
-            'ml_baselines': ml_results,
-            'all_results': self.evaluator_.get_dataframe(),
-            'best_by_model': best_df,
-            'best_overall': best_overall
+            'tda_results': tda_results,
+            'tda_best': tda_best,
+            'ml_results': ml_results if 'ml_results' in dir() else [],
+            'all_results': df,
+            'best_overall': df.loc[df['F1'].idxmax()].to_dict() if len(df) > 0 else {}
         }
 
+
+# ============================================================================
+# MAIN
+# ============================================================================
 
 def main():
     """
@@ -434,18 +369,23 @@ def main():
     """
     import argparse
     
+    base_dir = Path(__file__).parent.parent
+    default_tda = base_dir / "data" / "tda_raw"
+    default_processed = base_dir / "data" / "processed"
+    default_output = base_dir / "outputs"
+    
     parser = argparse.ArgumentParser(description='Đánh giá các mô hình')
-    parser.add_argument('--topo', default='outputs/topo_scores.npy',
-                       help='Đường dẫn topo_scores.npy')
-    parser.add_argument('--ml', default='outputs/ml_preds.npy',
-                       help='Đường dẫn ml_preds.npy')
-    parser.add_argument('--output', default='outputs', help='Thư mục output')
+    parser.add_argument('--tda-dir', default=str(default_tda),
+                       help='Thư mục chứa file TDA .pkl')
+    parser.add_argument('--ml-dir', default=str(default_processed),
+                       help='Thư mục chứa ml_preds.npy')
+    parser.add_argument('--output', default=str(default_output), help='Thư mục output')
     
     args = parser.parse_args()
     
     evaluator = AblationStudyEvaluator(
-        topo_scores_path=args.topo,
-        ml_preds_path=args.ml,
+        tda_dir=args.tda_dir,
+        ml_output_dir=args.ml_dir,
         output_dir=args.output
     )
     

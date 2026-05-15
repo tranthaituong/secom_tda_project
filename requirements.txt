@@ -21,3 +21,4 @@ weasyprint>=52.0
 # On Windows, you may need to install GTK3.
 # If WeasyPrint fails to install, visualization will still work
 # but PDF output will be skipped.
+tqdm
