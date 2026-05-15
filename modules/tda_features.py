@@ -33,7 +33,7 @@ from tqdm import tqdm
 
 BASE_DIR = Path(__file__).parent.parent
 DEFAULT_PROCESSED_DIR = BASE_DIR / "data" / "processed"
-DEFAULT_TDA_DIR = BASE_DIR / "data" / "tda_raw"
+DEFAULT_TDA_DIR = BASE_DIR / "outputs"
 
 
 # ============================================================================

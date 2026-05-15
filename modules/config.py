@@ -25,7 +25,7 @@ SECOM_DATA_FILE = DATA_DIR / "raw" / "secom.data"
 SECOM_LABELS_FILE = DATA_DIR / "raw" / "secom_labels.data"
 
 # Intermediate directories
-TDA_RAW_DIR = DATA_DIR / "tda_raw"
+# TDA results are now stored in OUTPUT_DIR
 
 
 # =============================================================================
@@ -188,7 +188,6 @@ class PipelineConfig:
         self.data_dir = DATA_DIR
         self.processed_dir = PROCESSED_DIR
         self.output_dir = OUTPUT_DIR
-        self.tda_raw_dir = TDA_RAW_DIR
         
         # ML Datasets
         self.ml_datasets = ML_DATASETS.copy()
